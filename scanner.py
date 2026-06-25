@@ -1,5 +1,4 @@
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
@@ -11,80 +10,69 @@ import time
 logger = logging.getLogger(__name__)
 WIB = pytz.timezone('Asia/Jakarta')
 
-# Daftar saham IDX populer (expand sesuai kebutuhan)
 IDX_TICKERS = [
-    # LQ45
-    "AALI.JK","ADRO.JK","AKRA.JK","AMRT.JK","ANTM.JK","ARTO.JK","ASII.JK","BBCA.JK",
-    "BBNI.JK","BBRI.JK","BBTN.JK","BMRI.JK","BRIS.JK","BRPT.JK","BUKA.JK","CPIN.JK",
-    "EMTK.JK","ERAA.JK","ESSA.JK","EXCL.JK","GGRM.JK","GOTO.JK","HMSP.JK","HRUM.JK",
-    "ICBP.JK","INCO.JK","INDF.JK","INKP.JK","INTP.JK","ITMG.JK","JPFA.JK","JSMR.JK",
-    "KLBF.JK","MAPI.JK","MBMA.JK","MDKA.JK","MEDC.JK","MIKA.JK","MNCN.JK","PGAS.JK",
-    "PGEO.JK","PTBA.JK","PTPP.JK","PWON.JK","SMGR.JK","SMMA.JK","TBIG.JK","TKIM.JK",
-    "TLKM.JK","TOWR.JK","TPIA.JK","UNTR.JK","UNVR.JK","WSKT.JK","SIDO.JK","HEAL.JK",
-    # IDX80 tambahan
-    "ADHI.JK","ACES.JK","ASSA.JK","AUTO.JK","BFIN.JK","BMTR.JK","BSDE.JK","CTRA.JK",
-    "DMAS.JK","DSNG.JK","ELSA.JK","GJTL.JK","HOKI.JK","IMJS.JK","INDS.JK","ISAT.JK",
-    "ISSP.JK","JAWA.JK","KIJA.JK","LINK.JK","LSIP.JK","MAPI.JK","MYOR.JK","NCKL.JK",
-    "NIKL.JK","PNBN.JK","SCMA.JK","SRTG.JK","SSIA.JK","TINS.JK","ULTJ.JK","WIKA.JK",
-    "WTON.JK","BNII.JK","FILM.JK","FOOD.JK","GIVE.JK","HRTA.JK","MTEL.JK","PALM.JK",
+    "AALI.JK","ADRO.JK","AKRA.JK","AMRT.JK","ANTM.JK","ASII.JK","BBCA.JK",
+    "BBNI.JK","BBRI.JK","BBTN.JK","BMRI.JK","BRIS.JK","BRPT.JK","CPIN.JK",
+    "EXCL.JK","GGRM.JK","GOTO.JK","HMSP.JK","HRUM.JK","ICBP.JK","INCO.JK",
+    "INDF.JK","INKP.JK","INTP.JK","ITMG.JK","JPFA.JK","JSMR.JK","KLBF.JK",
+    "MAPI.JK","MDKA.JK","MEDC.JK","MIKA.JK","PGAS.JK","PTBA.JK","PWON.JK",
+    "SMGR.JK","TBIG.JK","TLKM.JK","TOWR.JK","TPIA.JK","UNTR.JK","UNVR.JK",
+    "SIDO.JK","HEAL.JK","ADHI.JK","ACES.JK","AUTO.JK","BSDE.JK","CTRA.JK",
+    "ELSA.JK","ISAT.JK","LINK.JK","LSIP.JK","MYOR.JK","PNBN.JK","SCMA.JK",
+    "TINS.JK","ULTJ.JK","WIKA.JK","WTON.JK","MTEL.JK","FILM.JK","NCKL.JK",
+    "EMTK.JK","ESSA.JK","PGEO.JK","PTPP.JK","BMTR.JK","DSNG.JK","NIKL.JK",
 ]
 
 class MarketScanner:
     def __init__(self):
         self.last_signals = []
 
-    def fetch_price_data(self, ticker, period='3mo', interval='1d'):
+    def fetch_price_data(self, ticker, period='3mo'):
         try:
-            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
-            if df.empty or len(df) < 20:
+            tk = yf.Ticker(ticker)
+            hist = tk.history(period=period)
+            if hist.empty or len(hist) < 20:
                 return None
-            return df
+            return hist
         except Exception as e:
             logger.warning(f"Gagal fetch {ticker}: {e}")
             return None
-
-    def calculate_zscore(self, series, window=20):
-        mean = series.rolling(window).mean()
-        std = series.rolling(window).std()
-        zscore = (series - mean) / std
-        return zscore
 
     def analyze_ticker(self, ticker):
         df = self.fetch_price_data(ticker)
         if df is None:
             return None
-
         try:
-            close = df['Close'].squeeze()
+            close = np.array(df['Close'].tolist(), dtype=float)
+            volume = np.array(df['Volume'].tolist(), dtype=float)
+
             if len(close) < 50:
                 return None
 
-            ma20 = close.rolling(20).mean().iloc[-1]
-            ma50 = close.rolling(50).mean().iloc[-1]
-            current_price = close.iloc[-1]
+            # Moving averages
+            ma20 = float(np.mean(close[-20:]))
+            ma50 = float(np.mean(close[-50:]))
+            current_price = float(close[-1])
 
-            zscore_series = self.calculate_zscore(close, 20)
-            zscore = zscore_series.iloc[-1]
+            # Z-Score
+            std20 = float(np.std(close[-20:]))
+            zscore = (current_price - ma20) / std20 if std20 > 0 else 0
 
-            # Standar deviasi
-            std20 = close.rolling(20).std().iloc[-1]
-
-            # Volume analisis
-            volume = df['Volume'].squeeze()
-            vol_ma = volume.rolling(20).mean().iloc[-1]
-            vol_current = volume.iloc[-1]
+            # Volume ratio
+            vol_ma = float(np.mean(volume[-20:]))
+            vol_current = float(volume[-1])
             vol_ratio = vol_current / vol_ma if vol_ma > 0 else 1
 
             # Momentum
-            returns = close.pct_change()
-            momentum_5d = returns.iloc[-5:].sum()
-            momentum_20d = returns.iloc[-20:].sum()
+            if len(close) >= 6:
+                momentum_5d = float((close[-1] - close[-6]) / close[-6])
+            else:
+                momentum_5d = 0.0
 
             signal_type = None
             reason = ""
             probability = 50.0
 
-            # RenTech Logic: Mean Reversion + Momentum
             if zscore < -2.0:
                 signal_type = "BUY"
                 probability = min(95, 60 + abs(zscore) * 10)
@@ -104,11 +92,11 @@ class MarketScanner:
             elif ma20 > ma50 and current_price > ma20 and momentum_5d > 0.02:
                 signal_type = "BUY"
                 probability = 62.0
-                reason = f"Golden cross MA20>MA50, momentum 5 hari positif ({momentum_5d*100:.1f}%)"
+                reason = f"Golden cross MA20>MA50, momentum 5 hari +{momentum_5d*100:.1f}%"
             elif ma20 < ma50 and current_price < ma20 and momentum_5d < -0.02:
                 signal_type = "SELL"
                 probability = 62.0
-                reason = f"Death cross MA20<MA50, momentum 5 hari negatif ({momentum_5d*100:.1f}%)"
+                reason = f"Death cross MA20<MA50, momentum 5 hari {momentum_5d*100:.1f}%"
 
             if signal_type is None:
                 return None
@@ -116,14 +104,13 @@ class MarketScanner:
             return {
                 'ticker': ticker.replace('.JK', ''),
                 'type': signal_type,
-                'price': float(current_price),
-                'zscore': float(zscore),
-                'ma20': float(ma20),
-                'ma50': float(ma50),
-                'std': float(std20),
-                'volume_ratio': float(vol_ratio),
-                'momentum_5d': float(momentum_5d),
-                'probability': float(probability),
+                'price': current_price,
+                'zscore': zscore,
+                'ma20': ma20,
+                'ma50': ma50,
+                'volume_ratio': vol_ratio,
+                'momentum_5d': momentum_5d,
+                'probability': probability,
                 'reason': reason,
                 'time': datetime.now(WIB).strftime('%d/%m/%Y %H:%M WIB')
             }
@@ -131,44 +118,38 @@ class MarketScanner:
             logger.warning(f"Error analisis {ticker}: {e}")
             return None
 
-    def find_correlations(self, data_dict):
-        """Cari korelasi antar saham ala RenTech"""
+    def find_correlations(self, data_cache):
         arbitrage_signals = []
-        tickers = list(data_dict.keys())
-
+        tickers = list(data_cache.keys())
         if len(tickers) < 2:
             return arbitrage_signals
 
-        # Buat matriks return
-        returns_df = pd.DataFrame()
-        for ticker, df in data_dict.items():
+        returns_map = {}
+        for ticker, df in data_cache.items():
             try:
-                close = df['Close'].squeeze()
-                returns_df[ticker] = close.pct_change().dropna()
+                close = np.array(df['Close'].tolist(), dtype=float)
+                if len(close) < 21:
+                    continue
+                rets = np.diff(close) / close[:-1]
+                returns_map[ticker] = rets
             except:
                 continue
 
-        if returns_df.shape[1] < 2:
-            return arbitrage_signals
-
-        # Korelasi
-        corr_matrix = returns_df.corr()
-
-        # Cari pasangan sangat terkorelasi tapi harga diverge
-        for i in range(len(tickers)):
-            for j in range(i+1, len(tickers)):
-                t1, t2 = tickers[i], tickers[j]
-                if t1 not in corr_matrix.index or t2 not in corr_matrix.columns:
+        ticker_list = list(returns_map.keys())
+        for i in range(len(ticker_list)):
+            for j in range(i+1, len(ticker_list)):
+                t1, t2 = ticker_list[i], ticker_list[j]
+                r1, r2 = returns_map[t1], returns_map[t2]
+                min_len = min(len(r1), len(r2))
+                if min_len < 20:
                     continue
-                corr = corr_matrix.loc[t1, t2]
-
-                if corr > 0.85:  # Sangat terkorelasi
-                    try:
-                        r1 = returns_df[t1].iloc[-20:].sum()
-                        r2 = returns_df[t2].iloc[-20:].sum()
-                        spread = r1 - r2
-
-                        if abs(spread) > 0.08:  # Divergensi > 8%
+                try:
+                    corr = float(np.corrcoef(r1[-min_len:], r2[-min_len:])[0,1])
+                    if corr > 0.85:
+                        ret1_20 = float(np.sum(r1[-20:]))
+                        ret2_20 = float(np.sum(r2[-20:]))
+                        spread = ret1_20 - ret2_20
+                        if abs(spread) > 0.08:
                             arbitrage_signals.append({
                                 'ticker': f"{t1.replace('.JK','')} vs {t2.replace('.JK','')}",
                                 'type': 'ARBITRAGE',
@@ -176,147 +157,94 @@ class MarketScanner:
                                 'zscore': spread / 0.04,
                                 'ma20': 0,
                                 'ma50': 0,
-                                'std': 0,
                                 'volume_ratio': corr,
                                 'momentum_5d': spread,
                                 'probability': min(90, 60 + abs(spread) * 100),
-                                'reason': f"Korelasi tinggi ({corr:.2f}) tapi divergensi return 20 hari: {spread*100:.1f}%, potensi konvergensi",
+                                'reason': f"Korelasi tinggi ({corr:.2f}) tapi divergensi 20 hari: {spread*100:.1f}%, potensi konvergensi",
                                 'time': datetime.now(WIB).strftime('%d/%m/%Y %H:%M WIB')
                             })
-                    except:
-                        continue
+                except:
+                    continue
 
         return arbitrage_signals
 
-    def get_weather_data(self):
-        """Data cuaca BMKG sebagai data alternatif"""
-        try:
-            url = "https://data.bmkg.go.id/DataMKG/MEWS/DigitalForecast/DigitalForecast-Indonesia.xml"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                return "✅ Data cuaca BMKG berhasil diambil"
-            return "⚠️ Data cuaca BMKG tidak tersedia"
-        except:
-            return "⚠️ Tidak dapat terhubung ke BMKG"
-
     def get_macro_data(self):
-        """Data makro ekonomi Indonesia"""
         try:
-            macro_info = []
-            macro_info.append("🌐 *Data Makro Ekonomi Indonesia*\n")
+            lines = ["🌐 *Data Makro Ekonomi Indonesia*\n"]
 
-            # Yahoo Finance untuk USDIDR
-            try:
-                usdidr = yf.download("USDIDR=X", period="5d", progress=False, auto_adjust=True)
-                if not usdidr.empty:
-                    rate = usdidr['Close'].iloc[-1]
-                    rate_prev = usdidr['Close'].iloc[-2]
-                    change = ((rate - rate_prev) / rate_prev) * 100
-                    icon = "🔴" if change > 0 else "🟢"
-                    macro_info.append(f"{icon} USD/IDR: Rp {float(rate):,.0f} ({change:+.2f}%)")
-            except:
-                macro_info.append("⚠️ USD/IDR: Data tidak tersedia")
-
-            # IHSG
-            try:
-                ihsg = yf.download("^JKSE", period="5d", progress=False, auto_adjust=True)
-                if not ihsg.empty:
-                    val = ihsg['Close'].iloc[-1]
-                    val_prev = ihsg['Close'].iloc[-2]
-                    change = ((val - val_prev) / val_prev) * 100
-                    icon = "🟢" if change > 0 else "🔴"
-                    macro_info.append(f"{icon} IHSG: {float(val):,.2f} ({change:+.2f}%)")
-            except:
-                macro_info.append("⚠️ IHSG: Data tidak tersedia")
-
-            # Harga komoditas relevan
-            commodities = {
-                "Crude Oil (WTI)": "CL=F",
-                "Batu Bara": "BTU",
-                "Nikel": "NI=F",
+            pairs = {
+                "USD/IDR": "USDIDR=X",
+                "IHSG": "^JKSE",
+                "Crude Oil": "CL=F",
                 "Emas": "GC=F",
-                "CPO (Palm Oil)": "KPO=F"
+                "Nikel": "NI=F",
             }
 
-            macro_info.append("\n🛢 *Komoditas Terkait IDX:*")
-            for name, symbol in commodities.items():
+            for name, symbol in pairs.items():
                 try:
-                    data = yf.download(symbol, period="5d", progress=False, auto_adjust=True)
-                    if not data.empty and len(data) >= 2:
-                        price = data['Close'].iloc[-1]
-                        prev = data['Close'].iloc[-2]
-                        change = ((price - prev) / prev) * 100
+                    tk = yf.Ticker(symbol)
+                    hist = tk.history(period="5d")
+                    if not hist.empty and len(hist) >= 2:
+                        price = float(hist['Close'].iloc[-1])
+                        prev = float(hist['Close'].iloc[-2])
+                        change = (price - prev) / prev * 100
                         icon = "🟢" if change > 0 else "🔴"
-                        macro_info.append(f"{icon} {name}: {float(price):,.2f} ({change:+.2f}%)")
+                        lines.append(f"{icon} {name}: {price:,.2f} ({change:+.2f}%)")
                 except:
-                    pass
+                    lines.append(f"⚠️ {name}: tidak tersedia")
 
-            macro_info.append(f"\n🕐 Update: {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
-            return "\n".join(macro_info)
-
+            lines.append(f"\n🕐 {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
+            return "\n".join(lines)
         except Exception as e:
-            return f"❌ Error mengambil data makro: {str(e)}"
+            return f"❌ Error makro: {str(e)}"
 
     def get_sentiment(self):
-        """Scraping sentimen berita keuangan Indonesia"""
         try:
             headlines = []
             sources = [
-                ("https://www.cnbcindonesia.com/market", "CNBC Indonesia"),
-                ("https://bisnis.com/finansial", "Bisnis.com"),
+                ("https://www.cnbcindonesia.com/market", "CNBC"),
+                ("https://bisnis.com/finansial", "Bisnis"),
             ]
-
             for url, source in sources:
                 try:
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    headers = {'User-Agent': 'Mozilla/5.0'}
                     resp = requests.get(url, headers=headers, timeout=8)
                     soup = BeautifulSoup(resp.text, 'html.parser')
-
-                    # Ambil headline
-                    for tag in soup.find_all(['h1', 'h2', 'h3'], limit=5):
+                    for tag in soup.find_all(['h1','h2','h3'], limit=5):
                         text = tag.get_text().strip()
-                        if len(text) > 20 and len(text) < 200:
+                        if 20 < len(text) < 200:
                             headlines.append((source, text))
                 except:
                     continue
 
-            # Analisis sentimen sederhana
-            positive_words = ['naik', 'positif', 'bullish', 'rebound', 'rally', 'untung', 'profit', 'tumbuh', 'meningkat', 'menguat']
-            negative_words = ['turun', 'negatif', 'bearish', 'koreksi', 'jatuh', 'rugi', 'loss', 'melemah', 'anjlok', 'krisis']
+            positive_words = ['naik','positif','bullish','rebound','rally','untung','tumbuh','menguat']
+            negative_words = ['turun','negatif','bearish','koreksi','jatuh','rugi','melemah','anjlok']
 
-            pos_count = 0
-            neg_count = 0
-
-            msg_lines = ["📰 *Sentimen Berita Pasar Indonesia*\n"]
+            pos, neg = 0, 0
+            lines = ["📰 *Sentimen Berita Pasar Indonesia*\n"]
 
             for source, headline in headlines[:8]:
-                headline_lower = headline.lower()
-                p = sum(1 for w in positive_words if w in headline_lower)
-                n = sum(1 for w in negative_words if w in headline_lower)
-                pos_count += p
-                neg_count += n
-
+                hl = headline.lower()
+                p = sum(1 for w in positive_words if w in hl)
+                n = sum(1 for w in negative_words if w in hl)
+                pos += p; neg += n
                 icon = "🟢" if p > n else ("🔴" if n > p else "⚪")
-                msg_lines.append(f"{icon} [{source}] {headline[:100]}")
+                lines.append(f"{icon} [{source}] {headline[:100]}")
 
-            total = pos_count + neg_count
+            total = pos + neg
             if total > 0:
-                sentiment_score = (pos_count - neg_count) / total * 100
-                overall = "🟢 BULLISH" if sentiment_score > 20 else ("🔴 BEARISH" if sentiment_score < -20 else "⚪ NETRAL")
-                msg_lines.append(f"\n📊 *Skor Sentimen: {sentiment_score:+.0f}%*")
-                msg_lines.append(f"🎯 *Overall: {overall}*")
-            else:
-                msg_lines.append("\n⚠️ Tidak cukup data untuk skor sentimen")
+                score = (pos - neg) / total * 100
+                overall = "🟢 BULLISH" if score > 20 else ("🔴 BEARISH" if score < -20 else "⚪ NETRAL")
+                lines.append(f"\n📊 *Skor Sentimen: {score:+.0f}%*")
+                lines.append(f"🎯 *Overall: {overall}*")
 
-            msg_lines.append(f"\n🕐 {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
-            return "\n".join(msg_lines)
-
+            lines.append(f"\n🕐 {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
+            return "\n".join(lines)
         except Exception as e:
             return f"❌ Error sentimen: {str(e)}"
 
     def run_full_scan(self):
-        """Scan lengkap semua ticker IDX"""
-        logger.info(f"Memulai scan {len(IDX_TICKERS)} ticker...")
+        logger.info(f"Scan {len(IDX_TICKERS)} ticker...")
         signals = []
         data_cache = {}
 
@@ -329,17 +257,14 @@ class MarketScanner:
                     if result:
                         signals.append(result)
                 if i % 10 == 0:
-                    time.sleep(1)  # Rate limiting
+                    time.sleep(1)
             except Exception as e:
                 logger.warning(f"Skip {ticker}: {e}")
                 continue
 
-        # Cari arbitrage opportunities
-        arb_signals = self.find_correlations(data_cache)
-        signals.extend(arb_signals)
-
-        # Sort by probability
+        arb = self.find_correlations(data_cache)
+        signals.extend(arb)
         signals.sort(key=lambda x: x['probability'], reverse=True)
-
-        logger.info(f"Scan selesai. {len(signals)} sinyal ditemukan.")
+        logger.info(f"Scan selesai. {len(signals)} sinyal.")
         return signals
+            
