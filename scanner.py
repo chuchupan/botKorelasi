@@ -209,7 +209,7 @@ class MarketScanner:
                 try:
                     headers = {'User-Agent': 'Mozilla/5.0'}
                     resp = requests.get(url, headers=headers, timeout=8)
-                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    soup = BeautifulSoup(resp.text, 'html.parser')  # no lxml needed
                     for tag in soup.find_all(['h1','h2','h3'], limit=5):
                         text = tag.get_text().strip()
                         if 20 < len(text) < 200:
