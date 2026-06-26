@@ -1,0 +1,11 @@
+services:
+  - type: worker
+    name: rentech-bot
+    runtime: python
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python3 bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
