@@ -6,6 +6,7 @@ from datetime import datetime
 import pytz
 import logging
 import time
+from alternative_data import AlternativeDataScanner
 
 logger = logging.getLogger(__name__)
 WIB = pytz.timezone('Asia/Jakarta')
@@ -21,11 +22,13 @@ IDX_TICKERS = [
     "ELSA.JK","ISAT.JK","LINK.JK","LSIP.JK","MYOR.JK","PNBN.JK","SCMA.JK",
     "TINS.JK","ULTJ.JK","WIKA.JK","WTON.JK","MTEL.JK","FILM.JK","NCKL.JK",
     "EMTK.JK","ESSA.JK","PGEO.JK","PTPP.JK","BMTR.JK","DSNG.JK","NIKL.JK",
+    "INCO.JK","ANTM.JK","MEDC.JK","PGAS.JK","SMGR.JK","KLBF.JK","SIDO.JK",
 ]
 
 class MarketScanner:
     def __init__(self):
         self.last_signals = []
+        self.alt_scanner = AlternativeDataScanner()
 
     def fetch_price_data(self, ticker, period='3mo'):
         try:
@@ -45,29 +48,20 @@ class MarketScanner:
         try:
             close = np.array(df['Close'].tolist(), dtype=float)
             volume = np.array(df['Volume'].tolist(), dtype=float)
-
             if len(close) < 50:
                 return None
 
-            # Moving averages
             ma20 = float(np.mean(close[-20:]))
             ma50 = float(np.mean(close[-50:]))
             current_price = float(close[-1])
-
-            # Z-Score
             std20 = float(np.std(close[-20:]))
             zscore = (current_price - ma20) / std20 if std20 > 0 else 0
 
-            # Volume ratio
             vol_ma = float(np.mean(volume[-20:]))
             vol_current = float(volume[-1])
             vol_ratio = vol_current / vol_ma if vol_ma > 0 else 1
 
-            # Momentum
-            if len(close) >= 6:
-                momentum_5d = float((close[-1] - close[-6]) / close[-6])
-            else:
-                momentum_5d = 0.0
+            momentum_5d = float((close[-1] - close[-6]) / close[-6]) if len(close) >= 6 else 0.0
 
             signal_type = None
             reason = ""
@@ -76,11 +70,11 @@ class MarketScanner:
             if zscore < -2.0:
                 signal_type = "BUY"
                 probability = min(95, 60 + abs(zscore) * 10)
-                reason = f"Z-Score sangat rendah ({zscore:.2f}), harga jauh di bawah rata-rata, potensi rebound"
+                reason = f"Z-Score sangat rendah ({zscore:.2f}), potensi rebound ke rata-rata"
             elif zscore > 2.0:
                 signal_type = "SELL"
                 probability = min(95, 60 + abs(zscore) * 10)
-                reason = f"Z-Score sangat tinggi ({zscore:.2f}), harga jauh di atas rata-rata, potensi koreksi"
+                reason = f"Z-Score sangat tinggi ({zscore:.2f}), potensi koreksi ke rata-rata"
             elif zscore < -1.5 and vol_ratio > 1.5:
                 signal_type = "BUY"
                 probability = 65.0
@@ -92,17 +86,52 @@ class MarketScanner:
             elif ma20 > ma50 and current_price > ma20 and momentum_5d > 0.02:
                 signal_type = "BUY"
                 probability = 62.0
-                reason = f"Golden cross MA20>MA50, momentum 5 hari +{momentum_5d*100:.1f}%"
+                reason = f"Golden cross MA20>MA50, momentum +{momentum_5d*100:.1f}%"
             elif ma20 < ma50 and current_price < ma20 and momentum_5d < -0.02:
                 signal_type = "SELL"
                 probability = 62.0
-                reason = f"Death cross MA20<MA50, momentum 5 hari {momentum_5d*100:.1f}%"
+                reason = f"Death cross MA20<MA50, momentum {momentum_5d*100:.1f}%"
 
             if signal_type is None:
                 return None
 
+            # Boost probability dari data alternatif
+            ticker_base = ticker.replace('.JK', '')
+            alt_data = self.alt_scanner.get_all_alternative_signals()
+            alt_boost = 0
+            alt_notes = []
+
+            for macro in alt_data.get('macro', []):
+                if ticker_base in macro.get('bullish_stocks', []) and signal_type == 'BUY':
+                    alt_boost += 5
+                    alt_notes.append(f"✅ {macro['source']}")
+                elif ticker_base in macro.get('bearish_stocks', []) and signal_type == 'SELL':
+                    alt_boost += 5
+                    alt_notes.append(f"✅ {macro['source']}")
+
+            for weather in alt_data.get('weather', []):
+                if ticker_base in weather.get('bullish_stocks', []) and signal_type == 'BUY':
+                    alt_boost += 4
+                    alt_notes.append(f"🌤 {weather['source']}")
+                elif ticker_base in weather.get('bearish_stocks', []) and signal_type == 'SELL':
+                    alt_boost += 4
+                    alt_notes.append(f"🌤 {weather['source']}")
+
+            for news in alt_data.get('news_nlp', []):
+                if ticker_base in news.get('mentioned_stocks', []):
+                    if news['sentiment'] == 'BULLISH' and signal_type == 'BUY':
+                        alt_boost += 3
+                        alt_notes.append(f"📰 Berita positif")
+                    elif news['sentiment'] == 'BEARISH' and signal_type == 'SELL':
+                        alt_boost += 3
+                        alt_notes.append(f"📰 Berita negatif")
+
+            probability = min(97, probability + alt_boost)
+            if alt_notes:
+                reason += f" | Data alternatif: {', '.join(alt_notes[:2])}"
+
             return {
-                'ticker': ticker.replace('.JK', ''),
+                'ticker': ticker_base,
                 'type': signal_type,
                 'price': current_price,
                 'zscore': zscore,
@@ -112,6 +141,7 @@ class MarketScanner:
                 'momentum_5d': momentum_5d,
                 'probability': probability,
                 'reason': reason,
+                'alt_boost': alt_boost,
                 'time': datetime.now(WIB).strftime('%d/%m/%Y %H:%M WIB')
             }
         except Exception as e:
@@ -155,31 +185,25 @@ class MarketScanner:
                                 'type': 'ARBITRAGE',
                                 'price': 0,
                                 'zscore': spread / 0.04,
-                                'ma20': 0,
-                                'ma50': 0,
+                                'ma20': 0, 'ma50': 0,
                                 'volume_ratio': corr,
                                 'momentum_5d': spread,
                                 'probability': min(90, 60 + abs(spread) * 100),
-                                'reason': f"Korelasi tinggi ({corr:.2f}) tapi divergensi 20 hari: {spread*100:.1f}%, potensi konvergensi",
+                                'reason': f"Korelasi tinggi ({corr:.2f}), divergensi 20 hari: {spread*100:.1f}%, potensi konvergensi",
+                                'alt_boost': 0,
                                 'time': datetime.now(WIB).strftime('%d/%m/%Y %H:%M WIB')
                             })
                 except:
                     continue
-
         return arbitrage_signals
 
     def get_macro_data(self):
         try:
             lines = ["🌐 *Data Makro Ekonomi Indonesia*\n"]
-
             pairs = {
-                "USD/IDR": "USDIDR=X",
-                "IHSG": "^JKSE",
-                "Crude Oil": "CL=F",
-                "Emas": "GC=F",
-                "Nikel": "NI=F",
+                "USD/IDR": "USDIDR=X", "IHSG": "^JKSE",
+                "Crude Oil": "CL=F", "Emas": "GC=F", "Nikel": "NI=F",
             }
-
             for name, symbol in pairs.items():
                 try:
                     tk = yf.Ticker(symbol)
@@ -192,61 +216,27 @@ class MarketScanner:
                         lines.append(f"{icon} {name}: {price:,.2f} ({change:+.2f}%)")
                 except:
                     lines.append(f"⚠️ {name}: tidak tersedia")
-
             lines.append(f"\n🕐 {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
             return "\n".join(lines)
         except Exception as e:
             return f"❌ Error makro: {str(e)}"
 
     def get_sentiment(self):
-        try:
-            headlines = []
-            sources = [
-                ("https://www.cnbcindonesia.com/market", "CNBC"),
-                ("https://bisnis.com/finansial", "Bisnis"),
-            ]
-            for url, source in sources:
-                try:
-                    headers = {'User-Agent': 'Mozilla/5.0'}
-                    resp = requests.get(url, headers=headers, timeout=8)
-                    soup = BeautifulSoup(resp.text, 'html.parser')  # no lxml needed
-                    for tag in soup.find_all(['h1','h2','h3'], limit=5):
-                        text = tag.get_text().strip()
-                        if 20 < len(text) < 200:
-                            headlines.append((source, text))
-                except:
-                    continue
+        return self.alt_scanner.format_alternative_report()
 
-            positive_words = ['naik','positif','bullish','rebound','rally','untung','tumbuh','menguat']
-            negative_words = ['turun','negatif','bearish','koreksi','jatuh','rugi','melemah','anjlok']
-
-            pos, neg = 0, 0
-            lines = ["📰 *Sentimen Berita Pasar Indonesia*\n"]
-
-            for source, headline in headlines[:8]:
-                hl = headline.lower()
-                p = sum(1 for w in positive_words if w in hl)
-                n = sum(1 for w in negative_words if w in hl)
-                pos += p; neg += n
-                icon = "🟢" if p > n else ("🔴" if n > p else "⚪")
-                lines.append(f"{icon} [{source}] {headline[:100]}")
-
-            total = pos + neg
-            if total > 0:
-                score = (pos - neg) / total * 100
-                overall = "🟢 BULLISH" if score > 20 else ("🔴 BEARISH" if score < -20 else "⚪ NETRAL")
-                lines.append(f"\n📊 *Skor Sentimen: {score:+.0f}%*")
-                lines.append(f"🎯 *Overall: {overall}*")
-
-            lines.append(f"\n🕐 {datetime.now(WIB).strftime('%d/%m/%Y %H:%M')} WIB")
-            return "\n".join(lines)
-        except Exception as e:
-            return f"❌ Error sentimen: {str(e)}"
+    def get_alternative_report(self):
+        return self.alt_scanner.format_alternative_report()
 
     def run_full_scan(self):
         logger.info(f"Scan {len(IDX_TICKERS)} ticker...")
         signals = []
         data_cache = {}
+
+        # Pre-load alternative data sekali (di-cache)
+        try:
+            self.alt_scanner.get_all_alternative_signals()
+        except:
+            pass
 
         for i, ticker in enumerate(IDX_TICKERS):
             try:
@@ -267,4 +257,4 @@ class MarketScanner:
         signals.sort(key=lambda x: x['probability'], reverse=True)
         logger.info(f"Scan selesai. {len(signals)} sinyal.")
         return signals
-            
+                
